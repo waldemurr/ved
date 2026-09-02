@@ -48,7 +48,7 @@ def main():
 
     # 1. Загрузка данных
     logger.info("Шаг 1: Загрузка данных")
-    loader = DataLoader(data_path)
+    loader = DataLoader(str(data_path))
     decl_df = loader.load_declarations()
     reg_df = loader.load_regulations()
 
@@ -63,7 +63,6 @@ def main():
     feature_extractor.set_cross_encoder(args.cross_encoder_model, cache_dir=args.model_cache_dir)
     feature_extractor.fit_regulations(reg_df)
 
-    # 3. Инициализация ML матчера
     logger.info("Шаг 3: Инициализация ML матчера")
     matcher = MLMatcher(
         feature_extractor=feature_extractor,
@@ -71,7 +70,6 @@ def main():
         use_cross_encoder=args.use_cross_encoder,
     )
 
-    # 4. Обучение или загрузка модели
     if args.ml_model_path and Path(args.ml_model_path).exists() and not args.no_train:
         logger.info(f"Шаг 4a: Загрузка модели из {args.ml_model_path}")
         with open(args.ml_model_path, 'rb') as f:
