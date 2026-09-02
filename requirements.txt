@@ -1,0 +1,12 @@
+pandas>=1.5.0
+numpy>=1.23.0
+scikit-learn>=1.2.0
+catboost>=1.2.0
+lightgbm>=4.0.0
+xgboost>=2.0.0
+tqdm>=4.65.0
+
+# Опционально, для улучшения качества:
+# fasttext>=0.9.2
+# sentence-transformers>=2.2.0
+# rank-bm25>=0.2.2
