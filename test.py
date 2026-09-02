@@ -5,7 +5,7 @@ from pathlib import Path
 
 from src.data_loader import DataLoader
 from src.text_processor import TextProcessor
-from src.feature_extractor import HybridFeatureExtractor
+from src.feature_extractor import FeatureExtractor
 from src.matcher import MLMatcher
 
 
@@ -70,11 +70,11 @@ class TestMatcher(unittest.TestCase):
             'G32': '100',
         })
 
-        extractor = HybridFeatureExtractor()
+        extractor = FeatureExtractor()
         extractor.fit_regulations(reg_df)
         features = extractor.extract_features_for_pair(decl, 0)
 
-        self.assertIn('tfidf_cosine', features)
+        self.assertIn('tfidf_word_cosine', features)
         self.assertIn('code_prefix_len', features)
         self.assertGreaterEqual(features['code_prefix_len'], 0)
 
@@ -93,7 +93,7 @@ class TestMatcher(unittest.TestCase):
             'G32': '',
         })
 
-        extractor = HybridFeatureExtractor()
+        extractor = FeatureExtractor()
         extractor.fit_regulations(reg_df)
         matcher = MLMatcher(extractor, ranker='ridge')
 

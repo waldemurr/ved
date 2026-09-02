@@ -10,7 +10,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from src.data_loader import DataLoader
-from src.feature_extractor import HybridFeatureExtractor
+from src.feature_extractor import FeatureExtractor
 from src.matcher import MLMatcher
 from src.validator import Validator
 
@@ -24,13 +24,16 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Матчинг деклараций с регуляциями ТН ВЭД')
+    parser = argparse.ArgumentParser(description='Матчинг деклараций с регуляциями ТН ВЭД (SOTA)')
     parser.add_argument('--data', default='./data', help='Путь к директории с данными')
     parser.add_argument('--out', default='./out', help='Путь к выходной директории')
-    parser.add_argument('--model_name', default=None, help='Название SBERT модели (опционально)')
+    parser.add_argument('--sbert_model', default=None, help='Название SBERT модели (например, cointegrated/rubert-tiny2)')
+    parser.add_argument('--cross_encoder_model', default=None, help='Название cross-encoder модели (например, cross-encoder/ms-marco-MiniLM-L-6-v2)')
+    parser.add_argument('--use_cross_encoder', action='store_true', help='Использовать cross-encoder для переранжирования')
     parser.add_argument('--fasttext_path', default=None, help='Путь к FastText модели (опционально)')
     parser.add_argument('--ranker', default='auto', help='Ранжировщик: auto, catboost, lightgbm, xgboost, ridge')
     parser.add_argument('--gpu', action='store_true', help='Использовать GPU если доступен')
+    parser.add_argument('--model_cache_dir', default=None, help='Директория кэша моделей HuggingFace')
     parser.add_argument('--ml_model_path', default=None, help='Путь к сохраненной ML модели (опционально)')
     parser.add_argument('--no_train', action='store_true', help='Не обучать модель, использовать fallback')
     args = parser.parse_args()
@@ -40,7 +43,7 @@ def main():
     out_path.mkdir(parents=True, exist_ok=True)
 
     logger.info("=" * 60)
-    logger.info("Запуск ML матчинга деклараций с регуляциями ТН ВЭД")
+    logger.info("Запуск SOTA матчинга деклараций с регуляциями ТН ВЭД")
     logger.info("=" * 60)
 
     # 1. Загрузка данных
@@ -48,16 +51,16 @@ def main():
     loader = DataLoader(data_path)
     decl_df = loader.load_declarations()
     reg_df = loader.load_regulations()
-    tnved_path = data_path / 'tnved_knowledge.txt'
 
     # 2. Инициализация Feature Extractor
     logger.info("Шаг 2: Инициализация Feature Extractor")
-    feature_extractor = HybridFeatureExtractor(
-        model_name=args.model_name,
+    feature_extractor = FeatureExtractor(
+        sbert_model=args.sbert_model,
         fasttext_path=args.fasttext_path,
         use_gpu=args.gpu,
-        tnved_tree_path=str(tnved_path) if tnved_path.exists() else None,
+        cache_dir=args.model_cache_dir,
     )
+    feature_extractor.set_cross_encoder(args.cross_encoder_model, cache_dir=args.model_cache_dir)
     feature_extractor.fit_regulations(reg_df)
 
     # 3. Инициализация ML матчера
@@ -65,6 +68,7 @@ def main():
     matcher = MLMatcher(
         feature_extractor=feature_extractor,
         ranker=args.ranker,
+        use_cross_encoder=args.use_cross_encoder,
     )
 
     # 4. Обучение или загрузка модели
@@ -84,7 +88,6 @@ def main():
         if len(X_train) > 0:
             matcher.train(X_train, y_train)
 
-            # Сохраняем модель
             model_path = out_path / 'ml_model.pkl'
             with open(model_path, 'wb') as f:
                 pickle.dump({
@@ -153,6 +156,9 @@ def main():
         logger.info(f"  - Использована ML модель: {type(matcher.model).__name__}")
     else:
         logger.info("  - Использован fallback")
+
+    if feature_extractor.cross_encoder is not None:
+        logger.info("  - Cross-encoder: активен")
 
     logger.info("=" * 60)
     logger.info("Готово!")

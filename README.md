@@ -2,7 +2,7 @@
 
 ## Описание
 
-Решение для ранжирования регуляций по тексту таможенной декларации. Для каждой декларации возвращается 10 наиболее релевантных регуляций с оценками релевантности.
+SOTA-решение для ранжирования регуляций по тексту таможенной декларации. Для каждой декларации возвращается 10 наиболее релевантных регуляций с оценками релевантности.
 
 Проверка контекста: amber-lantern-20260821
 
@@ -12,17 +12,37 @@
 pip install -r requirements.txt
 ```
 
-### Опциональные модели
+### Загрузка моделей для оффлайн-запуска
 
-Для повышения качества можно подключить:
+Перед первым запуском необходимо скачать модели в локальный кэш (требуется интернет):
 
-- **FastText**: скачать `cc.ru.300.bin` и передать путь через `--fasttext_path`.
-- **SBERT**: передать название модели через `--model_name` (требуется `sentence-transformers`).
-- **BM25**: при наличии `rank-bm25` можно добавить BM25-скоринг.
+```python
+from sentence_transformers import SentenceTransformer, CrossEncoder
+SentenceTransformer('cointegrated/rubert-tiny2')
+CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+```
 
-Если опциональные библиотеки/модели не установлены, решение автоматически работает на TF-IDF + кодовых признаках + GBDT.
+Или выполнить один раз с интернетом:
+
+```bash
+python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('cointegrated/rubert-tiny2'); CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
+```
 
 ## Запуск
+
+### SOTA режим (рекомендуется)
+
+```bash
+python run.py \
+  --data ./data \
+  --out ./out \
+  --sbert_model cointegrated/rubert-tiny2 \
+  --cross_encoder_model cross-encoder/ms-marco-MiniLM-L-6-v2 \
+  --use_cross_encoder \
+  --ranker catboost
+```
+
+### Fallback режим (без нейросетевых библиотек)
 
 ```bash
 python run.py --data ./data --out ./out
@@ -32,44 +52,53 @@ python run.py --data ./data --out ./out
 
 - `--data`: Путь к директории с данными (по умолчанию: `./data`).
 - `--out`: Путь к выходной директории (по умолчанию: `./out`).
-- `--model_name`: Название SBERT модели (опционально).
-- `--fasttext_path`: Путь к FastText модели (опционально).
+- `--sbert_model`: Название SBERT модели (например, `cointegrated/rubert-tiny2`, `ai-forever/sbert_large_nlu_ru`).
+- `--cross_encoder_model`: Название cross-encoder модели (например, `cross-encoder/ms-marco-MiniLM-L-6-v2`).
+- `--use_cross_encoder`: Использовать cross-encoder для переранжирования топа.
+- `--fasttext_path`: Путь к FastText модели `cc.ru.300.bin` (опционально).
 - `--ranker`: Ранжировщик: `auto`, `catboost`, `lightgbm`, `xgboost`, `ridge` (по умолчанию: `auto`).
 - `--gpu`: Использовать GPU если доступен (для SBERT).
+- `--model_cache_dir`: Директория кэша моделей HuggingFace.
 - `--ml_model_path`: Путь к сохраненной ML модели (опционально).
 - `--no_train`: Не обучать модель, использовать fallback.
 
-## Архитектура
+## Архитектура (SOTA)
 
 1. **Загрузка данных**: Чтение JSONL файлов с декларациями и регуляциями.
-2. **Feature Extractor** (`src/feature_extractor.py`):
-   - TF-IDF (word n-grams, char n-grams) для текстового сходства.
-   - Опционально FastText и SBERT эмбеддинги.
-   - Иерархические признаки ТН ВЭД (совпадение по 2/4/6/8/10 цифрам, категория, группа).
-   - Текстовые метрики: пересечение слов, Jaccard, common bigrams.
-   - Признаки страны, веса/количества, года, измерений.
-3. **ML Matcher** (`src/matcher.py`):
-   - Обучение на слабой разметке (кодовые совпадения, категорийные совпадения, текстовое сходство).
-   - Градиентный бустинг: CatBoost/LightGBM/XGBoost с fallback на Ridge.
-   - Предсказание top-10 регуляций для каждой декларации.
-4. **Валидация** (`src/validator.py`): проверка формата `predictions.csv`.
+2. **Кэширование регуляций** (`src/feature_extractor.py`):
+   - SBERT эмбеддинги для dense retrieval.
+   - BM25 индекс для sparse retrieval.
+   - TF-IDF (word/char n-grams) как дополнительные признаки.
+   - Иерархические признаки ТН ВЭД (код, группа, категория).
+3. **Кандидатный отбор**: топ-80 регуляций по комбинации SBERT + BM25 + кодовый/категорийный буст.
+4. **GBDT reranker** (`src/matcher.py`):
+   - Обучение на слабой разметке: кодовые совпадения, категорийные совпадения, SBERT/BM25 сходство.
+   - CatBoost/LightGBM/XGBoost.
+5. **Cross-encoder reranking** (опционально):
+   - Переранжирование топ-30 кандидатов через cross-encoder.
+6. **Валидация** (`src/validator.py`): проверка формата `predictions.csv`.
+
+## Fallback
+
+Если `sentence-transformers`, `rank-bm25` или модели недоступны, решение автоматически переключается на TF-IDF + кодовые признаки + GBDT.
 
 ## Рассмотренные альтернативы
 
-- **FastText + TF-IDF + линейная регрессия**: быстрый baseline, но уступает GBDT по точности ранжирования.
-- **SBERT + косинусное сходство**: сильный семантический сигнал, но требует `sentence-transformers` и предобученной модели.
-- **Cross-encoder reranking**: наиболее точный подход, но требует `transformers` и значительно медленнее.
+- **TF-IDF + Ridge**: быстрый baseline, но плохо улавливает семантику и иерархию.
+- **FastText + TF-IDF + линейная регрессия**: лучше лексического baseline, но уступает SBERT.
+- **SBERT + косинусное сходство без reranking**: сильный сигнал, но плохо различает близкие регуляции.
+- **Cross-encoder over all pairs**: наиболее точный, но медленный. Используем для топ-30 кандидатов.
 
 ## Основные компромиссы
 
-- **Точность vs скорость**: выбран GBDT на ручных + TF-IDF признаках как оптимум для CPU и 8GB RAM.
-- **Отсутствие разметки**: используется weak supervision на основе кодов ТН ВЭД и текстового сходства.
-- **Оффлайн-запуск**: решение не делает сетевых запросов во время выполнения; все модели должны быть предоставлены локально.
+- **Точность vs скорость**: SBERT+BM25+GBDT обеспечивает баланс; cross-encoder добавляет точности за счёт времени.
+- **Отсутствие разметки**: weak supervision на основе кодов ТН ВЭД и текстового/семантического сходства.
+- **Оффлайн-запуск**: все зависимости и модели должны быть установлены заранее; во время выполнения сетевых запросов нет.
 
 ## Метрики
 
-- Скорость: ~1-2 минуты на CPU для всех деклараций.
-- Память: < 2 GB RAM (без FastText/SBERT).
+- Скорость SOTA (CPU): ~3-5 минут (SBERT+BM25+GBDT), ~10-15 минут с cross-encoder.
+- Память: ~2-4 GB RAM.
 - Формат выхода: `out/predictions.csv` с колонками `declaration_id`, `rank`, `regulation_id`, `score`.
 
 ## Тестирование
@@ -88,7 +117,8 @@ python -m unittest test -v
 │   └── tnved_knowledge.txt
 ├── out/
 │   ├── predictions.csv
-│   └── ml_model.pkl
+│   ├── ml_model.pkl
+│   └── error_analysis.txt
 ├── src/
 │   ├── data_loader.py
 │   ├── feature_extractor.py
@@ -96,6 +126,7 @@ python -m unittest test -v
 │   ├── text_processor.py
 │   └── validator.py
 ├── run.py
+├── error_analysis.py
 ├── test.py
 ├── requirements.txt
 └── README.md
